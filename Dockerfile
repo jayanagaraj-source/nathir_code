@@ -1,41 +1,47 @@
-FROM node:24 AS installer
-COPY . /juice-shop
-WORKDIR /juice-shop
-RUN npm install -g typescript@^6.0.3
-RUN npm install --omit=dev
-RUN npm dedupe --omit=dev
-RUN rm -rf frontend/node_modules
-RUN rm -rf frontend/.angular
-RUN rm -rf frontend/src/assets
-RUN mkdir logs
-RUN chown -R 65532 logs
-RUN chgrp -R 0 ftp/ frontend/dist/ logs/ data/ i18n/
-RUN chmod -R g=u ftp/ frontend/dist/ logs/ data/ i18n/
-RUN rm ftp/legal.md || true
-RUN rm i18n/*.json || true
+# TigerGate test fixture — mock vulnerable PHP host
+#
+# Purpose: seed a known-vulnerable PHP version so Cloud Security /
+# Vulnerability Management scanning picks up:
+#   - CVE-2026-109618  (RCE via OOM corruption, upload_progress unserializer UAF)
+#   - CVE-2026-109619  (RCE via stale global state / fatal-error backtrace UAF)
+#
+# This installs a PHP release BELOW the fixed versions so the package
+# manager's installed-version metadata (dpkg/apt) is what the scanner
+# matches against. It does not include, build, or run any exploit code —
+# detection only.
+#
+# Fixed versions (NOT used here): 8.2.35, 8.3.36, 8.4.27, 8.5.12
+# Vulnerable branch used below:   8.2.x < 8.2.35
 
-# keep version in sync with package.json
-ARG CYCLONEDX_NPM_VERSION='^2.0.0||^3.0.0||^4.0.0'
-RUN npm install -g @cyclonedx/cyclonedx-npm@$CYCLONEDX_NPM_VERSION
-RUN npm run sbom
+FROM debian:bookworm-slim
 
-FROM gcr.io/distroless/nodejs24-debian13
-ARG BUILD_DATE
-ARG VCS_REF
-LABEL maintainer="Bjoern Kimminich <bjoern.kimminich@owasp.org>" \
-    org.opencontainers.image.title="OWASP Juice Shop" \
-    org.opencontainers.image.description="Probably the most modern and sophisticated insecure web application" \
-    org.opencontainers.image.authors="Bjoern Kimminich <bjoern.kimminich@owasp.org>" \
-    org.opencontainers.image.vendor="Open Worldwide Application Security Project" \
-    org.opencontainers.image.documentation="https://help.owasp-juice.shop" \
-    org.opencontainers.image.licenses="MIT" \
-    org.opencontainers.image.version="20.2.0" \
-    org.opencontainers.image.url="https://owasp-juice.shop" \
-    org.opencontainers.image.source="https://github.com/juice-shop/juice-shop" \
-    org.opencontainers.image.revision=$VCS_REF \
-    org.opencontainers.image.created=$BUILD_DATE
-WORKDIR /juice-shop
-COPY --from=installer --chown=65532:0 /juice-shop .
-USER 65532
-EXPOSE 3000
-CMD ["/juice-shop/build/app.js"]
+ARG PHP_BRANCH=8.2
+# Last known-vulnerable patch release on the 8.2 branch before the fix.
+# Confirm the exact prior patch version against your distro's changelog
+# before relying on this for a demo — pin precisely, don't assume.
+ARG PHP_VULN_VERSION=8.2.34-1~deb12u1
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates gnupg wget lsb-release apt-transport-https && \
+    wget -qO /etc/apt/trusted.gpg.d/sury-php.gpg https://packages.sury.org/php/apt.gpg && \
+    echo "deb https://packages.sury.org/php/ bookworm main" > /etc/apt/sources.list.d/sury-php.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        php${PHP_BRANCH}=${PHP_VULN_VERSION} \
+        php${PHP_BRANCH}-fpm=${PHP_VULN_VERSION} \
+        php${PHP_BRANCH}-cli=${PHP_VULN_VERSION} && \
+    apt-mark hold php${PHP_BRANCH} php${PHP_BRANCH}-fpm php${PHP_BRANCH}-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# Leave upload_progress and fatal_error_backtraces at their vulnerable
+# defaults (do not apply the interim mitigations) so the fixture reflects
+# the pre-patch configuration a scanner should flag.
+
+LABEL vuln.cve="CVE-2026-109618,CVE-2026-109619" \
+      vuln.name="PHP2Shell" \
+      vuln.cvss="9.2" \
+      vuln.fixed_in="8.2.35,8.3.36,8.4.27,8.5.12" \
+      vuln.purpose="tigergate-test-infra vulnerability-management detection fixture"
+
+CMD ["php", "-v"]
