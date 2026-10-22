@@ -1,5 +1,4 @@
-# TigerGate test fixture — mock vulnerable PHP host
-#
+
 # Purpose: seed a known-vulnerable PHP version so Cloud Security /
 # Vulnerability Management scanning picks up:
 #   - CVE-2026-109618  (RCE via OOM corruption, upload_progress unserializer UAF)
